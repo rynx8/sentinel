@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Live feed{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>Live feed</h1>
+  <p class="lede">Every action your agents attempt, evaluated against policy before it runs.</p>
+</header>
+
+{% if not rows %}
+<div class="empty">No agent activity yet. Press <strong>Simulate agent activity</strong> to generate a batch.</div>
+{% else %}
+<table class="grid">
+  <thead>
+    <tr><th>seq</th><th>agent</th><th>action</th><th>target</th><th>decision</th><th>rule</th><th>chain</th></tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td class="mono dim">{{ '%05d' % r.seq }}</td>
+      <td>{{ r.agent_name }}</td>
+      <td class="mono">{{ r.action_type }}</td>
+      <td class="mono target" title="{{ r.target }}">{{ r.target }}</td>
+      <td><span class="pill {{ r.decision }}">{{ r.resolved or r.decision }}</span></td>
+      <td class="dim">{{ r.rule_name or '—' }}</td>
+      <td class="mono chain" title="prev {{ r.prev_hash }} → {{ r.hash }}">
+        {{ r.prev_hash[:6] }}<span class="link-glyph">⟶</span>{{ r.hash[:6] }}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

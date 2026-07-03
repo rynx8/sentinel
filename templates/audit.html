@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Audit chain{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>Audit chain</h1>
+  <p class="lede">Every record is SHA-256 chained to the one before it. Editing any past
+  action breaks the chain — verification proves the log is tamper-free.</p>
+</header>
+
+<div class="verify-bar">
+  <button id="verify-btn">Verify chain</button>
+  <label class="auto">
+    <input type="checkbox" id="auto-toggle"> Auto
+    <select id="auto-interval">
+      <option value="10000">10s</option>
+      <option value="30000" selected>30s</option>
+      <option value="60000">1m</option>
+      <option value="300000">5m</option>
+    </select>
+  </label>
+  <span id="verify-status" class="dim"></span>
+</div>
+
+<div id="report" class="report" hidden>
+  <div class="report-head">
+    <span id="rep-ok" class="pill"></span>
+    <span class="mono dim" id="rep-checked"></span>
+  </div>
+  <div class="metrics">
+    <div class="metric"><span class="metric-v" id="rep-total"></span><span class="metric-k">records</span></div>
+    <div class="metric"><span class="metric-v" id="rep-verified"></span><span class="metric-k">verified</span></div>
+    <div class="metric"><span class="metric-v" id="rep-eval"></span><span class="metric-k">eval ms</span></div>
+    <div class="metric"><span class="metric-v" id="rep-per"></span><span class="metric-k">µs / record</span></div>
+    <div class="metric"><span class="metric-v" id="rep-dom"></span><span class="metric-k">dominant action</span></div>
+  </div>
+  <div class="report-row"><span class="dim">eval breakdown</span> <span class="mono" id="rep-breakdown"></span></div>
+  <div class="report-row"><span class="dim">decisions</span> <span class="mono" id="rep-decisions"></span></div>
+  <div class="report-row"><span class="dim">time span</span> <span class="mono" id="rep-span"></span></div>
+  <div class="report-row"><span class="dim">head hash</span> <span class="mono" id="rep-head"></span></div>
+  <div class="report-row" id="rep-broken-row" hidden>
+    <span class="dim">broken at</span> <span class="mono danger" id="rep-broken"></span>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let timer = null;
+
+async function verify(silent) {
+  if (!silent) $('verify-status').textContent = 'verifying…';
+  try {
+    const r = await fetch('/api/v1/audit/verify');
+    const d = await r.json();
+    $('report').hidden = false;
+    $('rep-ok').textContent = d.ok ? 'CHAIN INTACT' : 'CHAIN BROKEN';
+    $('rep-ok').className = 'pill ' + (d.ok ? 'allowed' : 'blocked');
+    $('rep-checked').textContent = 'checked ' + d.checked_at.slice(11,19) + ' UTC';
+    $('rep-total').textContent = d.total;
+    $('rep-verified').textContent = d.verified;
+    $('rep-eval').textContent = d.eval_ms;
+    $('rep-per').textContent = d.eval_breakdown.per_record_us;
+    $('rep-dom').textContent = d.dominant_action_type || '—';
+    $('rep-breakdown').textContent =
+      'fetch ' + d.eval_breakdown.fetch_ms + 'ms · hash ' + d.eval_breakdown.hash_ms + 'ms';
+    $('rep-decisions').textContent = Object.entries(d.decision_counts)
+      .map(([k,v]) => k + ' ' + v).join(' · ') || '—';
+    $('rep-span').textContent = d.time_span.first
+      ? d.time_span.first.slice(0,19) + ' → ' + d.time_span.last.slice(0,19) : '—';
+    $('rep-head').textContent = d.head_hash;
+    $('rep-broken-row').hidden = d.ok;
+    if (!d.ok) $('rep-broken').textContent = 'seq ' + d.broken_at + ' — ' + d.reason;
+    $('verify-status').textContent = silent ? 'auto · last ' + d.checked_at.slice(11,19) : '';
+  } catch (e) {
+    $('verify-status').textContent = 'verification request failed — is the server running?';
+  }
+}
+
+$('verify-btn').addEventListener('click', () => verify(false));
+
+function restartTimer() {
+  clearInterval(timer); timer = null;
+  if ($('auto-toggle').checked) {
+    timer = setInterval(() => verify(true), +$('auto-interval').value);
+    verify(true);
+  } else {
+    $('verify-status').textContent = '';
+  }
+}
+$('auto-toggle').addEventListener('change', restartTimer);
+$('auto-interval').addEventListener('change', restartTimer);
+</script>
+{% endblock %}

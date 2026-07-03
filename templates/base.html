@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel — {% block title %}{% endblock %}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<aside class="sidebar">
+  <div class="brand">
+    <span class="brand-mark">◈</span>
+    <span class="brand-name">SENTINEL</span>
+  </div>
+  <div class="brand-sub">agent security &amp; governance</div>
+  <nav>
+    <a href="{{ url_for('feed') }}" class="{{ 'on' if active=='feed' }}">Live feed</a>
+    <a href="{{ url_for('approvals') }}" class="{{ 'on' if active=='approvals' }}">
+      Approvals
+      {% if pending_count %}<span class="badge">{{ pending_count }}</span>{% endif %}
+    </a>
+    <a href="{{ url_for('audit') }}" class="{{ 'on' if active=='audit' }}">Audit chain</a>
+    <a href="{{ url_for('agents') }}" class="{{ 'on' if active=='agents' }}">Agents</a>
+    <a href="{{ url_for('policies') }}" class="{{ 'on' if active=='policies' }}">Policies</a>
+  </nav>
+  <form method="post" action="{{ url_for('simulate') }}" class="sim">
+    <button type="submit">▸ Simulate agent activity</button>
+  </form>
+</aside>
+<main>
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

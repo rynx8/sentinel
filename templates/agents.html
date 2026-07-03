@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Agents{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>Agents</h1>
+  <p class="lede">Every agent reporting to Sentinel. The kill switch blocks all of an
+  agent's actions instantly at the API layer.</p>
+</header>
+
+{% for r in rows %}
+<div class="card">
+  <div class="card-main">
+    <div class="card-title">
+      <span class="pill {{ 'allowed' if r.status=='active' else 'blocked' }}">{{ r.status }}</span>
+      <strong>{{ r.name }}</strong>
+      <span class="mono dim">{{ r.id }}</span>
+    </div>
+    <div class="dim">{{ r.description or 'No description.' }}</div>
+    <div class="dim small">{{ r.actions or 0 }} actions · {{ r.risky or 0 }} flagged or blocked</div>
+  </div>
+  <div class="card-actions">
+    <form method="post" action="{{ url_for('toggle_agent', agent_id=r.id) }}">
+      {% if r.status == 'active' %}
+        <button class="deny">Kill switch</button>
+      {% else %}
+        <button class="approve">Reactivate</button>
+      {% endif %}
+    </form>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}

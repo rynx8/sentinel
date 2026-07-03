@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Approvals{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>Approval queue</h1>
+  <p class="lede">Actions held by policy. Nothing here executes until a human decides.</p>
+</header>
+
+{% if not rows %}
+<div class="empty">Queue is clear. Held actions will appear here for review.</div>
+{% else %}
+{% for r in rows %}
+<div class="card">
+  <div class="card-main">
+    <div class="card-title">
+      <span class="pill pending">held</span>
+      <strong class="mono">{{ r.action_type }}</strong>
+      <span class="dim">by {{ r.agent_name }}</span>
+    </div>
+    <div class="mono target">{{ r.target }}</div>
+    <div class="dim small">rule: {{ r.rule_name }} · severity: {{ r.severity }} · {{ r.created_at[:19].replace('T',' ') }} UTC</div>
+    <div class="mono small dim">params {{ r.params }}</div>
+  </div>
+  <div class="card-actions">
+    <form method="post" action="{{ url_for('resolve', seq=r.seq, verdict='approved') }}">
+      <button class="approve">Approve</button>
+    </form>
+    <form method="post" action="{{ url_for('resolve', seq=r.seq, verdict='denied') }}">
+      <button class="deny">Deny</button>
+    </form>
+  </div>
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

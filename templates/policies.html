@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Policies{% endblock %}
+{% block content %}
+<header class="page-head">
+  <h1>Policies</h1>
+  <p class="lede">Rules evaluated in order against every action, before it executes.
+  First match wins; no match means the action is allowed.</p>
+</header>
+
+{% for r in rules %}
+<div class="card">
+  <div class="card-main">
+    <div class="card-title">
+      <span class="pill {{ 'blocked' if r.decision=='blocked' else ('pending' if r.decision=='pending' else 'flagged') }}">{{ r.decision }}</span>
+      <strong class="mono">{{ r.name }}</strong>
+      <span class="dim small">severity: {{ r.severity }}</span>
+    </div>
+    <div class="dim">{{ r.description }}</div>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}
