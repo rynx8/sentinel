@@ -25,7 +25,7 @@ The database seeds itself with demo agents and activity on first run. Press
 | Approval queue — held actions wait for a human verdict | `/approvals` |
 | Hash-chained audit log with one-click + auto-interval verification | `/audit` |
 | Per-agent kill switch that blocks all actions at the API layer | `/agents` |
-| Policy rules viewer | `/policies` |
+| Policy editor — create, toggle, and delete rules from the dashboard | `/policies` |
 | SDK API — agents ask permission before acting | `POST /api/v1/actions` |
 | Chain verification endpoint with full metrics | `GET /api/v1/audit/verify` |
 
@@ -56,13 +56,15 @@ See `sdk_example.py` for a runnable demo.
 ## Architecture
 
 - **Flask + SQLite** — zero external services, one file to read (`app.py`)
-- **Rules engine** — ordered first-match rules, each mapping to
-  `blocked` / `pending` / `flagged` / `allowed` with a severity
+- **Rules engine** — rules live in the database and are editable from the
+  dashboard. Each rule matches on action types, target keywords (contains /
+  not-contains), and an optional numeric param condition (e.g.
+  `amount_usd > 100`), then maps to `blocked` / `pending` / `flagged` with a
+  severity. Enabled rules run in priority order; first match wins.
 - **Hash chain** — canonical JSON → SHA-256, genesis hash of 64 zeros
 
 ## Roadmap
 
-- [ ] Rules editable from the dashboard (stored in DB, not code)
 - [ ] Real-time feed via SSE instead of refresh
 - [ ] Auth + API keys per agent
 - [ ] Webhook/Slack alerts on blocks and holds

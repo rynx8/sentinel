@@ -3,19 +3,77 @@
 {% block content %}
 <header class="page-head">
   <h1>Policies</h1>
-  <p class="lede">Rules evaluated in order against every action, before it executes.
-  First match wins; no match means the action is allowed.</p>
+  <p class="lede">Rules evaluated in priority order against every action, before it
+  executes. First match wins; no match means the action is allowed.</p>
 </header>
 
+<details class="add-rule">
+  <summary>+ New rule</summary>
+  <form method="post" action="{{ url_for('add_policy') }}" class="rule-form">
+    <label>Name <input name="name" required placeholder="high-risk-deletes"></label>
+    <label>Description <input name="description" placeholder="Hold all file deletions for approval"></label>
+    <label>Action types <input name="action_types" placeholder="file_delete,shell_exec — or * for any" value="*"></label>
+    <label>Target match
+      <select name="target_mode">
+        <option value="any">any target</option>
+        <option value="contains">target contains keyword(s)</option>
+        <option value="not_contains">target does NOT contain keyword(s)</option>
+      </select>
+    </label>
+    <label>Target keywords <input name="target_keywords" placeholder="comma,separated,keywords"></label>
+    <label>Param condition
+      <span class="param-row">
+        <input name="param_key" placeholder="amount_usd" class="pk">
+        <select name="param_op" class="po">
+          <option>&gt;</option><option>&gt;=</option><option>&lt;</option>
+          <option>&lt;=</option><option>=</option>
+        </select>
+        <input name="param_value" placeholder="100" class="pv">
+      </span>
+    </label>
+    <label>Decision
+      <select name="decision">
+        <option value="flagged">flag — allow but mark for review</option>
+        <option value="pending">hold — wait for human approval</option>
+        <option value="blocked">block — stop it entirely</option>
+      </select>
+    </label>
+    <label>Severity
+      <select name="severity">
+        <option>low</option><option selected>medium</option>
+        <option>high</option><option>critical</option>
+      </select>
+    </label>
+    <label>Priority <input name="priority" type="number" value="100" title="Lower runs first"></label>
+    <button type="submit" class="save">Create rule</button>
+  </form>
+</details>
+
 {% for r in rules %}
-<div class="card">
+<div class="card {{ 'disabled' if not r.enabled }}">
   <div class="card-main">
     <div class="card-title">
       <span class="pill {{ 'blocked' if r.decision=='blocked' else ('pending' if r.decision=='pending' else 'flagged') }}">{{ r.decision }}</span>
       <strong class="mono">{{ r.name }}</strong>
-      <span class="dim small">severity: {{ r.severity }}</span>
+      <span class="dim small">priority {{ r.priority }} · severity {{ r.severity }}</span>
+      {% if not r.enabled %}<span class="pill off">off</span>{% endif %}
     </div>
     <div class="dim">{{ r.description }}</div>
+    <div class="mono small dim">
+      when {{ r.action_types }}
+      {%- if r.target_mode == 'contains' %} · target has: {{ r.target_keywords }}{% endif %}
+      {%- if r.target_mode == 'not_contains' %} · target lacks: {{ r.target_keywords }}{% endif %}
+      {%- if r.param_key %} · {{ r.param_key }} {{ r.param_op }} {{ r.param_value }}{% endif %}
+    </div>
+  </div>
+  <div class="card-actions">
+    <form method="post" action="{{ url_for('toggle_policy', rule_id=r.id) }}">
+      <button class="{{ 'deny' if r.enabled else 'approve' }}">{{ 'Disable' if r.enabled else 'Enable' }}</button>
+    </form>
+    <form method="post" action="{{ url_for('delete_policy', rule_id=r.id) }}"
+          onsubmit="return confirm('Delete rule {{ r.name }}? This cannot be undone.')">
+      <button class="ghost">Delete</button>
+    </form>
   </div>
 </div>
 {% endfor %}

@@ -42,6 +42,21 @@ CREATE TABLE IF NOT EXISTS agents (
     description TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active'      -- active | killed
 );
+CREATE TABLE IF NOT EXISTS rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL DEFAULT '',
+    action_types TEXT NOT NULL DEFAULT '*',   -- comma list, or * for any
+    target_mode TEXT NOT NULL DEFAULT 'any',  -- any | contains | not_contains
+    target_keywords TEXT NOT NULL DEFAULT '', -- comma list
+    param_key TEXT,                            -- optional numeric condition
+    param_op TEXT,                             -- > | >= | < | <= | =
+    param_value REAL,
+    decision TEXT NOT NULL,                    -- blocked | pending | flagged
+    severity TEXT NOT NULL DEFAULT 'medium',
+    priority INTEGER NOT NULL DEFAULT 100,     -- lower runs first
+    enabled INTEGER NOT NULL DEFAULT 1
+);
 CREATE TABLE IF NOT EXISTS actions (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     agent_id TEXT NOT NULL REFERENCES agents(id),
@@ -171,69 +186,86 @@ def verify_chain(db):
 
 
 # ------------------------------------------------------------ rules engine
+# Rules live in the database and are editable from the /policies page.
+# Evaluation: enabled rules run in priority order (lower first); the first
+# rule whose conditions ALL match decides the action. No match = allowed.
 
-# decision: "blocked" stops the action, "pending" holds it for human
-# approval, "flagged" allows but marks for review, "allowed" passes.
-RULES = [
-    {
-        "name": "credential-access",
-        "description": "Block any read of secrets, keys, or credential stores.",
-        "decision": "blocked",
-        "severity": "critical",
-        "match": lambda t, target, p: t in ("file_read", "env_read")
-        and any(k in target.lower() for k in
-                (".env", "secret", "credential", "id_rsa", "apikey", "api_key", "token")),
-    },
-    {
-        "name": "spend-limit",
-        "description": "Block any payment or purchase over $100.",
-        "decision": "blocked",
-        "severity": "critical",
-        "match": lambda t, target, p: t == "payment"
-        and float(json.loads(p).get("amount_usd", 0)) > 100,
-    },
-    {
-        "name": "outbound-email",
-        "description": "Hold all outbound email for human approval.",
-        "decision": "pending",
-        "severity": "high",
-        "match": lambda t, target, p: t == "send_email",
-    },
-    {
-        "name": "unknown-domain",
-        "description": "Flag HTTP requests to domains outside the allowlist.",
-        "decision": "flagged",
-        "severity": "medium",
-        "match": lambda t, target, p: t == "http_request"
-        and not any(d in target for d in
-                    ("api.openai.com", "api.anthropic.com", "internal.corp",
-                     "api.stripe.com", "docs.google.com")),
-    },
-    {
-        "name": "bulk-data-export",
-        "description": "Hold exports of more than 1,000 records for approval.",
-        "decision": "pending",
-        "severity": "high",
-        "match": lambda t, target, p: t == "data_export"
-        and int(json.loads(p).get("rows", 0)) > 1000,
-    },
-    {
-        "name": "shell-execution",
-        "description": "Flag all shell command execution for review.",
-        "decision": "flagged",
-        "severity": "medium",
-        "match": lambda t, target, p: t == "shell_exec",
-    },
+DEFAULT_RULES = [
+    dict(name="credential-access", priority=10, decision="blocked", severity="critical",
+         description="Block any read of secrets, keys, or credential stores.",
+         action_types="file_read,env_read", target_mode="contains",
+         target_keywords=".env,secret,credential,id_rsa,apikey,api_key,token"),
+    dict(name="spend-limit", priority=20, decision="blocked", severity="critical",
+         description="Block any payment or purchase over $100.",
+         action_types="payment", target_mode="any", target_keywords="",
+         param_key="amount_usd", param_op=">", param_value=100),
+    dict(name="outbound-email", priority=30, decision="pending", severity="high",
+         description="Hold all outbound email for human approval.",
+         action_types="send_email", target_mode="any", target_keywords=""),
+    dict(name="bulk-data-export", priority=40, decision="pending", severity="high",
+         description="Hold exports of more than 1,000 records for approval.",
+         action_types="data_export", target_mode="any", target_keywords="",
+         param_key="rows", param_op=">", param_value=1000),
+    dict(name="unknown-domain", priority=50, decision="flagged", severity="medium",
+         description="Flag HTTP requests to domains outside the allowlist.",
+         action_types="http_request", target_mode="not_contains",
+         target_keywords="api.openai.com,api.anthropic.com,internal.corp,api.stripe.com,docs.google.com"),
+    dict(name="shell-execution", priority=60, decision="flagged", severity="medium",
+         description="Flag all shell command execution for review.",
+         action_types="shell_exec", target_mode="any", target_keywords=""),
 ]
 
 
-def evaluate(action_type, target, params_json):
-    for rule in RULES:
+def seed_rules(db):
+    if db.execute("SELECT COUNT(*) c FROM rules").fetchone()["c"] == 0:
+        for r in DEFAULT_RULES:
+            db.execute(
+                """INSERT INTO rules (name, description, action_types, target_mode,
+                   target_keywords, param_key, param_op, param_value, decision,
+                   severity, priority)
+                   VALUES (:name,:description,:action_types,:target_mode,
+                   :target_keywords,:param_key,:param_op,:param_value,:decision,
+                   :severity,:priority)""",
+                {**dict(param_key=None, param_op=None, param_value=None), **r})
+        db.commit()
+
+
+def rule_matches(rule, action_type, target, params):
+    """All of the rule's configured conditions must hold."""
+    if rule["action_types"].strip() != "*":
+        types = [t.strip() for t in rule["action_types"].split(",") if t.strip()]
+        if action_type not in types:
+            return False
+    kws = [k.strip().lower() for k in (rule["target_keywords"] or "").split(",") if k.strip()]
+    tl = (target or "").lower()
+    if rule["target_mode"] == "contains" and not any(k in tl for k in kws):
+        return False
+    if rule["target_mode"] == "not_contains" and any(k in tl for k in kws):
+        return False
+    if rule["param_key"]:
         try:
-            if rule["match"](action_type, target, params_json):
-                return rule["decision"], rule["name"], rule["severity"]
-        except (ValueError, KeyError, json.JSONDecodeError):
-            continue
+            v = float(params.get(rule["param_key"]))
+        except (TypeError, ValueError):
+            return False
+        op, pv = rule["param_op"], rule["param_value"]
+        ok = {"": False, ">": v > pv, ">=": v >= pv, "<": v < pv,
+              "<=": v <= pv, "=": v == pv}.get(op or "", False)
+        if not ok:
+            return False
+    return True
+
+
+def evaluate(db, action_type, target, params_json):
+    try:
+        params = json.loads(params_json)
+    except json.JSONDecodeError:
+        params = {}
+    rules = db.execute(
+        "SELECT * FROM rules WHERE enabled=1 ORDER BY priority ASC, id ASC"
+    ).fetchall()
+    for rule in rules:
+        if rule_matches(rule, action_type, target, params):
+            return rule["decision"], rule["name"], rule["severity"]
     return "allowed", None, "low"
 
 
@@ -277,6 +309,7 @@ def ensure_agents(db):
 
 def simulate_batch(db, n=8):
     ensure_agents(db)
+    seed_rules(db)
     active = [r["id"] for r in
               db.execute("SELECT id FROM agents WHERE status='active'")]
     if not active:
@@ -285,7 +318,7 @@ def simulate_batch(db, n=8):
         agent_id = random.choice(active)
         action_type, target, params = random.choice(SIM_ACTIONS)
         params_json = json.dumps(params, sort_keys=True)
-        decision, rule_name, severity = evaluate(action_type, target, params_json)
+        decision, rule_name, severity = evaluate(db, action_type, target, params_json)
         append_action(db, agent_id, action_type, target, params_json,
                       decision, rule_name, severity)
     return n
@@ -377,8 +410,62 @@ def toggle_agent(agent_id):
 
 @app.route("/policies")
 def policies():
-    rules = [{k: v for k, v in r.items() if k != "match"} for r in RULES]
+    db = get_db()
+    seed_rules(db)
+    rules = db.execute(
+        "SELECT * FROM rules ORDER BY priority ASC, id ASC").fetchall()
     return render_template("policies.html", rules=rules, active="policies")
+
+
+@app.route("/policies/add", methods=["POST"])
+def add_policy():
+    f = request.form
+    name = (f.get("name") or "").strip()
+    if not name:
+        return redirect(url_for("policies"))
+    param_key = (f.get("param_key") or "").strip() or None
+    try:
+        param_value = float(f.get("param_value")) if param_key else None
+    except ValueError:
+        param_value = None
+        param_key = None
+    db = get_db()
+    try:
+        db.execute(
+            """INSERT INTO rules (name, description, action_types, target_mode,
+               target_keywords, param_key, param_op, param_value, decision,
+               severity, priority) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (name,
+             (f.get("description") or "").strip(),
+             (f.get("action_types") or "*").strip() or "*",
+             f.get("target_mode") if f.get("target_mode") in ("any", "contains", "not_contains") else "any",
+             (f.get("target_keywords") or "").strip(),
+             param_key,
+             f.get("param_op") if param_key and f.get("param_op") in (">", ">=", "<", "<=", "=") else None,
+             param_value,
+             f.get("decision") if f.get("decision") in ("blocked", "pending", "flagged") else "flagged",
+             f.get("severity") if f.get("severity") in ("low", "medium", "high", "critical") else "medium",
+             int(f.get("priority") or 100)))
+        db.commit()
+    except sqlite3.IntegrityError:
+        pass  # duplicate name — ignore quietly for v1
+    return redirect(url_for("policies"))
+
+
+@app.route("/policies/<int:rule_id>/toggle", methods=["POST"])
+def toggle_policy(rule_id):
+    db = get_db()
+    db.execute("UPDATE rules SET enabled = 1 - enabled WHERE id=?", (rule_id,))
+    db.commit()
+    return redirect(url_for("policies"))
+
+
+@app.route("/policies/<int:rule_id>/delete", methods=["POST"])
+def delete_policy(rule_id):
+    db = get_db()
+    db.execute("DELETE FROM rules WHERE id=?", (rule_id,))
+    db.commit()
+    return redirect(url_for("policies"))
 
 
 @app.route("/simulate", methods=["POST"])
@@ -415,7 +502,7 @@ def api_submit_action():
         return jsonify({"decision": "blocked", "rule": "agent-kill-switch",
                         "seq": seq, "hash": digest}), 200
 
-    decision, rule_name, severity = evaluate(action_type, target, params_json)
+    decision, rule_name, severity = evaluate(db, action_type, target, params_json)
     seq, digest = append_action(db, agent_id, action_type, target,
                                 params_json, decision, rule_name, severity)
     return jsonify({"decision": decision, "rule": rule_name,
@@ -434,6 +521,7 @@ if __name__ == "__main__":
     with app.app_context():
         db = get_db()
         ensure_agents(db)
+        seed_rules(db)
         if db.execute("SELECT COUNT(*) c FROM actions").fetchone()["c"] == 0:
             simulate_batch(db, n=24)   # seed demo data on first run
     import os
